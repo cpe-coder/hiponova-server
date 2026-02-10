@@ -48,6 +48,9 @@ app.get("/", (req, res) => {
 require("./models/userModel");
 const user = mongose.model("User");
 
+require("./models/loginLogModel");
+const LoginLog = mongose.model("LoginLog");
+
 function generateAccessToken(id) {
 	return jwt.sign(id, tokenSecret, { expiresIn: "43200s" });
 }
@@ -83,30 +86,65 @@ app.get("/api/auth/logout", async (res) => {
 	return res.status(200).json({ message: "Logged out successfully" });
 });
 
+// app.post("/api/auth/login", async (req, res) => {
+// 	const { email, password } = req.body;
+
+// 	if (!email || !password) {
+// 		return res.status(400).json({ message: "All fields are required" });
+// 	}
+// 	const userExists = await user.findOne({ email });
+
+// 	if (userExists) {
+// 		const isPasswordCorrect = await bcrypt.compare(
+// 			password,
+// 			userExists.password,
+// 		);
+// 		const token = generateAccessToken({
+// 			id: userExists._id,
+// 		});
+// 		if (isPasswordCorrect) {
+// 			return res.status(200).json({ message: "Login successful", token });
+// 		} else {
+// 			return res.status(400).json({ message: "Invalid email or password" });
+// 		}
+// 	}
+
+// 	return res.status(400).json({ message: "User does not exist" });
+// });
+
 app.post("/api/auth/login", async (req, res) => {
 	const { email, password } = req.body;
 
 	if (!email || !password) {
 		return res.status(400).json({ message: "All fields are required" });
 	}
-	const userExists = await user.findOne({ email });
 
-	if (userExists) {
-		const isPasswordCorrect = await bcrypt.compare(
-			password,
-			userExists.password,
-		);
-		const token = generateAccessToken({
-			id: userExists._id,
-		});
-		if (isPasswordCorrect) {
-			return res.status(200).json({ message: "Login successful", token });
-		} else {
-			return res.status(400).json({ message: "Invalid email or password" });
-		}
+	const userExists = await user.findOne({ email });
+	if (!userExists) {
+		return res.status(400).json({ message: "User does not exist" });
 	}
 
-	return res.status(400).json({ message: "User does not exist" });
+	const isPasswordCorrect = await bcrypt.compare(password, userExists.password);
+
+	if (!isPasswordCorrect) {
+		return res.status(400).json({ message: "Invalid email or password" });
+	}
+
+	// create token
+	const token = generateAccessToken({ id: userExists._id });
+
+	// save login log
+	await LoginLog.create({
+		userId: userExists._id,
+		email: userExists.email,
+		loginTime: new Date(),
+		status: "ACTIVE",
+	});
+
+	return res.status(200).json({
+		message: "Login successful",
+		token,
+	});
 });
 
 app.post("/api/auth/register", async (req, res) => {
@@ -144,4 +182,27 @@ app.post("/api/auth/register", async (req, res) => {
 	} catch (error) {
 		return res.status(500).json({ message: "Internal server error" });
 	}
+});
+
+app.post("/api/auth/logout", authenticateToken, async (req, res) => {
+	const log = await LoginLog.findOne({
+		userId: req.user.id,
+		status: "ACTIVE",
+	}).sort({ createdAt: -1 });
+
+	if (!log) {
+		return res.status(400).json({ message: "No active session found" });
+	}
+
+	log.logoutTime = new Date();
+	log.status = "LOGOUT";
+	await log.save();
+
+	return res.status(200).json({ message: "Logged out successfully" });
+});
+
+app.get("/api/logs/login", authenticateToken, async (req, res) => {
+	const logs = await LoginLog.find().sort({ createdAt: -1 }).limit(50);
+
+	return res.status(200).json(logs);
 });
